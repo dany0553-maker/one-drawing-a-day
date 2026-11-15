@@ -11,21 +11,22 @@ var dayDiff=function(a,b){return Math.round((parse(b)-parse(a))/864e5)};
 var fLong=new Intl.DateTimeFormat("he-IL",{weekday:"long",day:"numeric",month:"long"});
 var fShort=new Intl.DateTimeFormat("he-IL",{day:"numeric",month:"long"});
 var fMonth=new Intl.DateTimeFormat("he-IL",{month:"long",year:"numeric"});
+var fCm=new Intl.DateTimeFormat("he-IL",{day:"numeric",month:"short",hour:"2-digit",minute:"2-digit"});
 var fmtLong=function(s){return fLong.format(parse(s))};
 var fmtShort=function(s){return fShort.format(parse(s))};
 
 var REACTS=["❤️","😍","🔥","👏","🤯"];
 var COL={b:"var(--p0)",p:"var(--p1)",y:"var(--p2)",g:"var(--p3)",r:"var(--red)"};
-var KINDS=["tri","circ","dia","half"];
+var KINDS=["tri","circ","dia","half","sq","zig"];
 var BUCKET="drawings";
 var START=/^\d{4}-\d{2}-\d{2}$/.test(CFG.START_DATE||"")?CFG.START_DATE:null;
 
 var S={sb:null,uid:null,view:"boot",
   authMode:"login",authEmail:"",
-  drawings:[],byId:{},names:{},order:[],first:null,
+  drawings:[],byId:{},names:{},starts:{},order:[],first:null,authStart:"",
   loaded:false,err:"",lastLoad:0,
   tab:"days",filter:"all",month:null,
-  lb:null,editing:false,pendingDel:null,reacting:false,
+  lb:null,editing:false,pendingDel:null,reacting:false,pick:null,focusC:false,startModal:false,
   sheet:false,prefDate:null,ch:null};
 var now=new Date();S.month={y:now.getFullYear(),m:now.getMonth()};
 var U={items:[],busy:false,msg:"",msg2:""};
@@ -48,10 +49,30 @@ function strip(){
   var seq=[["tri","b"],["circ","y"],["dia","r"],["half","p"],["zig","g"],["sq","b"],["tri","p"],["circ","g"],["dia","y"],["half","r"]];
   return '<div class="strip" aria-hidden="true">'+seq.map(function(x){return shape(x[0],COL[x[1]],28)}).join("")+'</div>';
 }
-function pIndex(uid){return Math.max(0,Math.min(S.order.indexOf(uid),3))}
+function pIndex(uid){return Math.max(0,Math.min(S.order.indexOf(uid),5))}
 function pColor(uid){return "var(--p"+pIndex(uid)+")"}
 function marker(uid,size){return shape(KINDS[pIndex(uid)],pColor(uid),size||14)}
 function nameOf(uid){var n=S.names[uid];if(n)return n;return uid===S.uid?"אני":"חבר/ה"}
+
+/* ---------- personal start dates ---------- */
+function firstOf(uid){var m=null;S.drawings.forEach(function(d){if(d.uid===uid&&(!m||d.date<m))m=d.date});return m}
+function startOf(uid){
+  var base=S.starts[uid]||START||null;
+  var f=firstOf(uid);
+  if(!base)return f||ymd(new Date());
+  return (f&&f<base)?f:base;
+}
+function dayNum(uid,date){return Math.max(1,dayDiff(startOf(uid),date)+1)}
+function missingDays(uid){
+  var t=ymd(new Date()),n=0,d=parse(startOf(uid));
+  while(ymd(d)<t){if(!S.byId[ymd(d)+"_"+uid])n++;d.setDate(d.getDate()+1)}
+  return n;
+}
+function emptyText(){
+  var t=ymd(new Date()),st=S.uid?startOf(S.uid):t;
+  if(st<t)return "התחלת ב-"+fmtShort(st)+". אפשר להעלות את כל הציורים מהימים שעברו, ולבחור תאריך לכל ציור.";
+  return "העלו את הציור הראשון שלכם והוא יופיע כאן, ליד הציורים של החבר/ה.";
+}
 
 /* ---------- images ---------- */
 var urlCache={};
@@ -73,9 +94,9 @@ function compute(){
   Object.keys(S.names).forEach(function(k){set.add(k)});
   if(S.uid)set.add(S.uid);
   S.order=Array.from(set).sort();
-  var first=S.drawings.length?S.drawings.reduce(function(a,d){return d.date<a?d.date:a},S.drawings[0].date):null;
-  if(START&&(!first||START<first))first=START;
-  S.first=first;
+  var min=null;
+  S.order.forEach(function(u){var s=startOf(u);if(!min||s<min)min=s});
+  S.first=min;
   if(S.filter!=="all"&&!set.has(S.filter))S.filter="all";
 }
 function visible(){return S.drawings.filter(function(d){return S.filter==="all"||d.uid===S.filter})}
@@ -84,14 +105,6 @@ function lbList(){
     if(a.date===b.date)return S.order.indexOf(a.uid)-S.order.indexOf(b.uid);
     return a.date<b.date?1:-1;
   });
-}
-function streak(uid){
-  var set=new Set(S.drawings.filter(function(d){return d.uid===uid}).map(function(d){return d.date}));
-  var d=new Date();d.setHours(12,0,0,0);
-  if(!set.has(ymd(d)))d.setDate(d.getDate()-1);
-  var n=0;
-  while(set.has(ymd(d))){n++;d.setDate(d.getDate()-1)}
-  return n;
 }
 function count(uid){return S.drawings.filter(function(d){return d.uid===uid}).length}
 function daysWord(n){return n===1?"יום אחד":n+" ימים"}
@@ -114,7 +127,7 @@ function render(){
   if(!S.loaded&&!S.err){
     html+='<div class="note-box">טוען את הספר…</div>';
   }else if(S.loaded){
-    html+=statsHTML()+todayHTML()+yearHTML()+controlsHTML()+(S.tab==="days"?daysHTML():calHTML());
+    html+=streaksHTML()+todayHTML()+yearHTML()+controlsHTML()+(S.tab==="days"?daysHTML():calHTML());
   }
   html+='<div style="margin-top:28px">'+strip()+'</div>';
   $("#app").innerHTML=html;
@@ -131,7 +144,8 @@ function offlineHTML(){
 function authHTML(){
   var su=S.authMode==="signup";
   return '<form class="auth" id="auth-form" novalidate><h2>'+(su?"פתיחת חשבון":"כניסה")+'</h2>'+
-    (su?'<div class="field"><label for="a-name">איך לקרוא לך?</label><input id="a-name" name="name" type="text" autocomplete="nickname" maxlength="30"></div>':'')+
+    (su?'<div class="field"><label for="a-name">איך לקרוא לך?</label><input id="a-name" name="name" type="text" autocomplete="nickname" maxlength="30"></div>'+
+      '<div class="field"><label for="a-start">מתי התחלת לצייר בספר?</label><input id="a-start" name="start" type="date" max="'+ymd(new Date())+'" value="'+esc(S.authStart||ymd(new Date()))+'"><span class="hint">אם התחלת לפני היום, אחרי ההרשמה תוכל להעלות את הציורים הקודמים.</span></div>':'')+
     '<div class="field"><label for="a-email">אימייל</label><input id="a-email" name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" value="'+esc(S.authEmail)+'" dir="ltr"></div>'+
     '<div class="field"><label for="a-pw">סיסמה</label><input id="a-pw" name="password" type="password" autocomplete="'+(su?"new-password":"current-password")+'" dir="ltr"></div>'+
     '<p class="msg" id="auth-msg" role="alert"></p>'+
@@ -140,23 +154,78 @@ function authHTML(){
 }
 
 function headerHTML(){
-  var sub;
-  if(S.drawings.length||START){
-    var n=Math.max(1,dayDiff(S.first,ymd(new Date()))+1);
-    sub='יום <b>'+n+'</b> בספר · <b>'+S.drawings.length+'</b> ציורים';
-  }else sub="הספר עוד ריק";
-  return '<header class="top">'+strip()+'<h1>ציור <span class="hl">ביום</span></h1><p class="sub"><span>'+sub+'</span><button class="linkbtn" data-act="logout">התנתקות</button></p></header>';
+  var sub=S.uid?'יום <b>'+dayNum(S.uid,ymd(new Date()))+'</b> שלך · <b>'+count(S.uid)+'</b> ציורים':"";
+  return '<header class="top">'+strip()+'<h1>ציור <span class="hl">ביום</span></h1><p class="sub"><span>'+sub+'</span><button class="linkbtn" data-act="start-open">תאריך התחלה</button><button class="linkbtn" data-act="logout">התנתקות</button></p></header>';
 }
 
-function statsHTML(){
-  if(!S.order.length)return "";
-  var cards=S.order.map(function(u){
-    var st=streak(u);
-    return '<div class="stat"><div class="nm">'+marker(u,16)+'<span>'+esc(nameOf(u))+'</span>'+(u===S.uid?'<em class="me-tag">אני</em>':'')+'</div>'+
-      '<div class="row"><span class="big">'+count(u)+'</span><small>ציורים</small></div>'+
-      '<small>'+(st>0?'רצף של '+daysWord(st):'אין רצף כרגע')+'</small></div>';
+/* ---------- streaks ---------- */
+var MILES=[7,14,30,50,100,200,365];
+var WD=["א","ב","ג","ד","ה","ו","ש"];
+function streakInfo(uid){
+  var set=new Set(S.drawings.filter(function(d){return d.uid===uid}).map(function(d){return d.date}));
+  var today=ymd(new Date());
+  var base=new Date();base.setHours(12,0,0,0);
+  var drewToday=set.has(today);
+  var c=new Date(base);if(!drewToday)c.setDate(c.getDate()-1);
+  var cur=0;
+  while(set.has(ymd(c))){cur++;c.setDate(c.getDate()-1)}
+  var best=0,run=0,prev=null;
+  Array.from(set).sort().forEach(function(s){
+    run=(prev&&dayDiff(prev,s)===1)?run+1:1;
+    if(run>best)best=run;
+    prev=s;
+  });
+  var week=[];
+  for(var i=6;i>=0;i--){
+    var x=new Date(base);x.setDate(x.getDate()-i);
+    var s2=ymd(x);
+    week.push({date:s2,on:set.has(s2),today:i===0,dow:x.getDay()});
+  }
+  return {cur:cur,best:Math.max(best,cur),week:week,drewToday:drewToday};
+}
+function weekHTML(uid,info,big){
+  var k=KINDS[pIndex(uid)],c=pColor(uid);
+  return info.week.map(function(w){
+    var inner;
+    if(w.on)inner=shape(k,c,big?32:18);
+    else inner='<span class="ring'+(w.today?' today':'')+'"></span>';
+    if(!big)return inner;
+    return '<div class="sk-wd'+(w.today?' is-today':'')+'">'+inner+(w.today?'היום':WD[w.dow])+'</div>';
   }).join("");
-  return '<section class="stats" style="--n:'+Math.min(S.order.length,3)+'">'+cards+'</section>';
+}
+function bigStreakHTML(uid){
+  var me=uid===S.uid;
+  var i=streakInfo(uid),c=pColor(uid);
+  var next=MILES.filter(function(m){return m>i.cur})[0];
+  var badge=(i.cur>=7&&MILES.indexOf(i.cur)>=0)?'<span class="sk-badge">הגעת ל-'+i.cur+'</span>':'';
+  var risk="";
+  if(!i.drewToday){
+    if(me)risk='<div class="sk-risk">'+(i.cur>0?'עוד לא ציירת היום. הרצף בסכנה.':'עוד לא ציירת היום. ציור היום מתחיל רצף חדש.')+'</div>';
+    else risk='<div class="sk-risk soft">עוד לא '+esc(nameOf(uid))+' צייר/ה היום.</div>';
+  }
+  var left=next?next-i.cur:0;
+  var bar=next?'<div class="sk-bar"><div class="sk-row"><span>עוד '+(left===1?'יום אחד':left+' ימים')+' ליעד של '+next+'</span><span dir="ltr">'+i.cur+' / '+next+'</span></div><div class="sk-track"><div class="sk-fill" style="width:'+Math.round(i.cur/next*100)+'%;background:'+c+'"></div></div></div>':'';
+  return '<section class="sk-card">'+
+    '<div class="sk-who">'+marker(uid,16)+'<span>'+esc(nameOf(uid))+'</span>'+(me?'<em class="me-tag">אני</em>':'')+'</div>'+
+    '<div class="sk-main"><span class="sk-num" style="color:'+c+'">'+i.cur+'</span><span class="sk-lbl">'+(i.cur===1?'יום ברצף':'ימים ברצף')+'</span>'+badge+'</div>'+
+    risk+'<div class="sk-week">'+weekHTML(uid,i,true)+'</div>'+bar+
+    '<div class="sk-best">השיא: '+daysWord(i.best)+' · '+count(uid)+' ציורים</div></section>';
+}
+function rowStreakHTML(uid){
+  var i=streakInfo(uid),c=pColor(uid);
+  return '<div class="sk-r"><div class="sk-nm">'+marker(uid,14)+'<span>'+esc(nameOf(uid))+'</span></div>'+
+    '<div class="sk-n" style="color:'+c+'">'+i.cur+'<small>'+(i.cur===1?'יום':'ימים')+'</small></div>'+
+    '<div class="sk-mini">'+weekHTML(uid,i,false)+'</div></div>';
+}
+function streaksHTML(){
+  if(!S.order.length)return "";
+  var others=S.order.filter(function(u){return u!==S.uid}).map(function(u){return {u:u,c:streakInfo(u).cur}})
+    .sort(function(a,b){return b.c-a.c||S.order.indexOf(a.u)-S.order.indexOf(b.u)});
+  var h="";
+  if(S.uid)h+=bigStreakHTML(S.uid);
+  if(others.length===1)h+=bigStreakHTML(others[0].u);
+  else if(others.length>1)h+='<div class="sk-sec">השאר</div><section class="sk-list">'+others.map(function(o){return rowStreakHTML(o.u)}).join("")+'</section>';
+  return '<div class="streaks">'+h+'</div>';
 }
 
 function todayHTML(){
@@ -172,7 +241,9 @@ function todayHTML(){
   }else{
     friends='<span>החבר/ה עוד לא נרשם/ה. שלחו להם את הקישור לאפליקציה.</span>';
   }
-  var acts='<button class="btn primary" data-act="pick">'+(mine?"החלפת הציור":"העלאת הציור של היום")+'</button>';
+  var miss=S.uid?missingDays(S.uid):0;
+  var acts='<button class="btn primary" data-act="pick">'+(mine?"החלפת הציור":"העלאת הציור של היום")+'</button>'+
+    (miss>0?'<button class="linkbtn" data-act="pick">יש '+(miss===1?'יום אחד':miss+' ימים')+' בלי ציור. להוסיף?</button>':'');
   var thumb=mine?'<button class="thumb" data-act="open" data-id="'+esc(mine.id)+'" aria-label="פתיחת הציור של היום">'+imgTag(mine,"הציור של היום")+'</button>':"";
   return '<section class="today"><div class="info"><span class="date">'+esc(fmtLong(t))+'</span>'+
     '<h2>'+(mine?"הציור של היום בפנים":"עוד אין ציור להיום")+'</h2>'+
@@ -192,10 +263,11 @@ function yearHTML(){
     var d=new Date(start.getFullYear(),start.getMonth(),start.getDate()+i,12);
     var s=ymd(d);
     var who=S.order.filter(function(u){return S.byId[s+"_"+u]});
+    var part=S.order.filter(function(u){return startOf(u)<=s});
     var cls="yc"+(s>t?" future":"");
     if(who.length){
       done++;
-      var col=(n>1&&who.length===n)?"var(--p2)":pColor(who[0]);
+      var col=(part.length>1&&who.length===part.length)?"var(--p2)":pColor(who[0]);
       cells+='<button class="'+cls+'" style="background:'+col+'" data-act="openday" data-date="'+s+'" aria-label="'+esc(fmtShort(s))+'"></button>';
     }else cells+='<i class="'+cls+'"></i>';
   }
@@ -212,30 +284,47 @@ function controlsHTML(){
     '<button data-act="tab" data-t="days" aria-pressed="'+(S.tab==="days")+'">ימים</button>'+
     '<button data-act="tab" data-t="cal" aria-pressed="'+(S.tab==="cal")+'">לוח שנה</button></div>'+
     '<span class="spacer"></span>'+
-    (S.drawings.length?'<button class="btn" data-act="surprise">הפתעה</button>':'')+
+    ''+
     '</div>'+(chips?'<div class="ctl-row">'+chips+'</div>':'')+'</section>';
 }
 
 function emptyHTML(){
   return '<div class="empty-state"><div class="cluster">'+shape("tri",COL.b,44)+shape("circ",COL.y,36)+shape("dia",COL.r,44)+shape("half",COL.p,36)+shape("sq",COL.g,40)+'</div>'+
-    '<h2>הדף הראשון מחכה</h2><p>העלו את הציור הראשון שלכם והוא יופיע כאן, ליד הציורים של החבר/ה.</p>'+
+    '<h2>הדף הראשון מחכה</h2><p>'+esc(emptyText())+'</p>'+
     '<button class="btn primary" data-act="pick">העלאת ציור</button></div>';
+}
+
+function qrHTML(d){
+  var counts={},mine=(S.uid&&d.reactions)?d.reactions[S.uid]:"";
+  Object.keys(d.reactions||{}).forEach(function(k){var e=d.reactions[k];if(e)counts[e]=(counts[e]||0)+1});
+  var id=esc(d.id);
+  var chips=Object.keys(counts).map(function(e){
+    return '<button class="qc'+(mine===e?' me':'')+'" data-act="qreact" data-id="'+id+'" data-e="'+e+'" aria-pressed="'+(mine===e)+'">'+e+'<small>'+counts[e]+'</small></button>';
+  }).join("");
+  var open=S.pick===d.id;
+  var picker=open?'<div class="qpick">'+REACTS.map(function(e){return '<button class="qc'+(mine===e?' me':'')+'" data-act="qreact" data-id="'+id+'" data-e="'+e+'" aria-label="תגובה '+e+'">'+e+'</button>'}).join("")+'</div>':"";
+  var nc=(d.comments||[]).length;
+  return '<div class="qr" data-id="'+id+'"><div class="qrow">'+chips+
+    (canUpload()?'<button class="qc add" data-act="qpick" data-id="'+id+'" aria-label="'+(open?"סגירה":"הוספת אימוג׳י")+'">'+(open?'×':'☺ +')+'</button>':'')+
+    '<button class="qc" data-act="open" data-focus="c" data-id="'+id+'" aria-label="תגובות">💬'+(nc?'<small>'+nc+'</small>':'')+'</button></div>'+picker+'</div>';
+}
+function refreshQr(d){
+  var el=document.querySelector('.qr[data-id="'+d.id+'"]');
+  if(el)el.outerHTML=qrHTML(d);
 }
 
 function slotHTML(date,uid){
   var d=S.byId[date+"_"+uid];
   var t=ymd(new Date());
   if(!d){
-    if(uid===S.uid&&canUpload()&&date<=t)
+    if(uid===S.uid&&canUpload()&&date<=t&&date>=startOf(uid))
       return '<button class="slot empty add" data-act="add" data-date="'+date+'"><span class="plus" aria-hidden="true">+</span><span>להוסיף ציור</span></button>';
     return '<div class="slot empty">'+(date===t?"עוד לא העלו":"לא צויר")+'</div>';
   }
-  var rc=Object.keys(d.reactions||{}).map(function(k){return d.reactions[k]}).filter(Boolean);
-  var uniq=Array.from(new Set(rc)).slice(0,3).join("");
-  return '<button class="slot" data-act="open" data-id="'+esc(d.id)+'" aria-label="'+esc("ציור של "+nameOf(uid)+", "+fmtShort(date))+'">'+
+  return '<div class="tile"><button class="slot" data-act="open" data-id="'+esc(d.id)+'" aria-label="'+esc("ציור של "+nameOf(uid)+", "+fmtShort(date))+'">'+
     imgTag(d,"ציור של "+nameOf(uid))+
-    '<span class="who">'+marker(uid,12)+'<b>'+esc(nameOf(uid))+'</b></span>'+
-    (rc.length?'<span class="rx">'+uniq+(rc.length>1?" "+rc.length:"")+'</span>':"")+'</button>';
+    '<span class="who">'+marker(uid,12)+'<b>'+esc(nameOf(uid))+'</b></span><span class="dayn">יום '+dayNum(uid,date)+'</span></button>'+
+    qrHTML(d)+'</div>';
 }
 
 function daysHTML(){
@@ -245,9 +334,10 @@ function daysHTML(){
   var persons=S.filter==="all"?S.order:[S.filter];
   var t=ymd(new Date());
   return '<section class="feed">'+dates.map(function(date){
-    var n=Math.max(1,dayDiff(S.first,date)+1);
-    return '<article class="day"><div class="day-head"><h3>'+esc(fmtLong(date))+(date===t?'<span class="tag-today">היום</span>':'')+'</h3><span class="dn">יום '+n+'</span></div>'+
-      '<div class="slots" style="--n:'+Math.min(persons.length,3)+'">'+persons.map(function(u){return slotHTML(date,u)}).join("")+'</div></article>';
+    var ps=persons.filter(function(u){return startOf(u)<=date});
+    var mn=(S.uid&&startOf(S.uid)<=date)?'יום '+dayNum(S.uid,date)+' שלך':'';
+    return '<article class="day"><div class="day-head"><h3>'+esc(fmtLong(date))+(date===t?'<span class="tag-today">היום</span>':'')+'</h3><span class="dn">'+mn+'</span></div>'+
+      '<div class="slots" style="--n:'+Math.min(ps.length,3)+'">'+ps.map(function(u){return slotHTML(date,u)}).join("")+'</div></article>';
   }).join("")+'</section>';
 }
 
@@ -267,7 +357,7 @@ function calHTML(){
     if(ds.length){
       h+='<button class="'+cls+'" data-act="openday" data-date="'+s+'" aria-label="'+esc(fmtShort(s))+'"><span class="th">'+
         ds.map(function(x){return '<i style="background-image:url(&quot;'+esc(thumbUrl(x))+'&quot;)"></i>'}).join("")+'</span><span class="n">'+d+'</span></button>';
-    }else if(S.uid&&s<=t&&!S.byId[s+"_"+S.uid]&&S.first&&s>=S.first){
+    }else if(S.uid&&s<=t&&!S.byId[s+"_"+S.uid]&&s>=startOf(S.uid)){
       h+='<button class="'+cls+' plain addable" data-act="add" data-date="'+s+'" aria-label="הוספת ציור ל-'+esc(fmtShort(s))+'"><span class="n">'+d+'</span></button>';
     }else{
       h+='<div class="'+cls+' plain"><span class="n">'+d+'</span></div>';
@@ -282,7 +372,7 @@ function openLb(id){
   document.body.style.overflow="hidden";
   $("#fab").hidden=true;
   renderLb();
-  var c=$("#lb-root .lb-close");if(c)c.focus();
+  if(S.focusC){S.focusC=false;var ci=$("#cm-in");if(ci){ci.scrollIntoView({block:"center"});ci.focus()}}else{var c=$("#lb-root .lb-close");if(c)c.focus()}
 }
 function closeLb(){
   S.lb=null;S.editing=false;S.pendingDel=null;
@@ -297,12 +387,20 @@ function renderLb(){
   if(i<0){closeLb();return}
   var d=list[i];
   var mine=d.uid===S.uid;
+  var cin=$("#cm-in");
+  var keep=cin?{v:cin.value,f:document.activeElement===cin}:null;
   var counts={},mineR=S.uid&&d.reactions?d.reactions[S.uid]:"";
   Object.keys(d.reactions||{}).forEach(function(k){var e=d.reactions[k];if(e)counts[e]=(counts[e]||0)+1});
-  var n=Math.max(1,dayDiff(S.first,d.date)+1);
+  var n=dayNum(d.uid,d.date);
   var react=REACTS.map(function(e){
     return '<button class="react" data-act="react" data-e="'+e+'" aria-pressed="'+(mineR===e)+'" aria-label="תגובה '+e+'">'+e+(counts[e]?'<small>'+counts[e]+'</small>':'')+'</button>';
   }).join("");
+  var cms=(d.comments||[]).map(function(c){
+    var can=(c.uid===S.uid||d.uid===S.uid)&&canUpload();
+    return '<div class="cm"><div class="cm-h"><span class="cm-n">'+marker(c.uid,11)+esc(nameOf(c.uid))+'</span><span class="cm-t">'+esc(fCm.format(new Date(c.at)))+'</span>'+
+      (can?'<button class="cm-x" data-act="cmdel" data-cid="'+esc(c.id)+'" aria-label="מחיקת תגובה">×</button>':'')+'</div><p class="cm-b">'+esc(c.body)+'</p></div>';
+  }).join("");
+  var form=canUpload()?'<form class="cm-form" id="cm-form"><input id="cm-in" class="note-in" maxlength="200" placeholder="כתבו תגובה…" autocomplete="off" aria-label="תגובה"><button class="btn primary" type="submit">שליחה</button></form>':"";
   var acts="";
   if(mine&&canUpload()){
     acts='<button class="btn" data-act="editnote">'+(d.note?"עריכת הערה":"הוספת הערה")+'</button>'+
@@ -315,7 +413,10 @@ function renderLb(){
     '<button class="nav" data-act="next" aria-label="הבא"'+(i===list.length-1?" disabled":"")+'>‹</button></div>'+
     '<div class="lb-info"><div class="lb-meta"><span class="pill">'+marker(d.uid,14)+esc(nameOf(d.uid))+'</span><span class="lb-date">'+esc(fmtLong(d.date))+' · יום '+n+'</span></div>'+
     '<p class="lb-note'+(d.note?"":" none")+'">'+(d.note?esc(d.note):"אין הערה")+'</p>'+
-    '<div class="reacts">'+react+'</div>'+(acts?'<div class="lb-acts">'+acts+'</div>':"")+'</div></div></div>';
+    '<div class="reacts">'+react+'</div>'+
+    (cms?'<div class="cms">'+cms+'</div>':'')+form+
+    (acts?'<div class="lb-acts">'+acts+'</div>':"")+'</div></div></div>';
+  if(keep){var ni=$("#cm-in");if(ni){ni.value=keep.v;if(keep.f)ni.focus()}}
 }
 function lbStep(dir){
   var list=lbList();
@@ -356,15 +457,18 @@ async function loadAll(){
     var res=await Promise.all([
       run(function(){return S.sb.from("drawings").select("*").order("date",{ascending:false}).limit(2000)}),
       run(function(){return S.sb.from("reactions").select("*").limit(10000)}),
-      run(function(){return S.sb.from("profiles").select("id,name")})
+      run(function(){return S.sb.from("profiles").select("id,name,start_date")}),
+      run(function(){return S.sb.from("comments").select("*").order("created_at",{ascending:true}).limit(5000)})
     ]);
-    var rx={};
+    var rx={},cm={};
+    (res[3]||[]).forEach(function(c){(cm[c.drawing_id]=cm[c.drawing_id]||[]).push({id:c.id,uid:c.user_id,body:c.body,at:c.created_at})});
     (res[1]||[]).forEach(function(r){(rx[r.drawing_id]=rx[r.drawing_id]||{})[r.user_id]=r.emoji});
     S.drawings=(res[0]||[]).map(function(r){
-      return {id:r.date+"_"+r.user_id,uuid:r.id,uid:r.user_id,date:r.date,path:r.image_path,thumb:r.thumb_path,note:r.note||"",reactions:rx[r.id]||{}};
+      return {id:r.date+"_"+r.user_id,uuid:r.id,uid:r.user_id,date:r.date,path:r.image_path,thumb:r.thumb_path,note:r.note||"",reactions:rx[r.id]||{},comments:cm[r.id]||[]};
     });
     S.names={};
-    (res[2]||[]).forEach(function(p){S.names[p.id]=p.name||""});
+    S.starts={};
+    (res[2]||[]).forEach(function(p){S.names[p.id]=p.name||"";if(p.start_date)S.starts[p.id]=p.start_date});
     S.loaded=true;S.err="";S.lastLoad=Date.now();
   }catch(e){
     S.err="load";
@@ -379,6 +483,7 @@ function startRealtime(){
     S.ch=S.sb.channel("rt-drawings")
       .on("postgres_changes",{event:"*",schema:"public",table:"drawings"},schedLoad)
       .on("postgres_changes",{event:"*",schema:"public",table:"reactions"},schedLoad)
+      .on("postgres_changes",{event:"*",schema:"public",table:"comments"},schedLoad)
       .subscribe();
   }catch(e){}
 }
@@ -388,23 +493,50 @@ function stopRealtime(){
 }
 
 /* ---------- reactions, notes, delete ---------- */
-async function doReact(emoji){
+async function doReact(emoji,id){
   if(!S.sb||!S.uid||S.reacting)return;
-  var d=S.byId[S.lb];if(!d)return;
-  var cur=d.reactions&&d.reactions[S.uid];
+  var d=S.byId[id||S.lb];if(!d)return;
+  d.reactions=d.reactions||{};
+  var cur=d.reactions[S.uid];
   var remove=(cur===emoji);
   var prev=cur;
   if(remove)delete d.reactions[S.uid];else d.reactions[S.uid]=emoji;
-  renderLb();
+  refreshQr(d);if(S.lb)renderLb();
   S.reacting=true;
   try{
     if(remove)await run(function(){return S.sb.from("reactions").delete().eq("drawing_id",d.uuid).eq("user_id",S.uid)});
     else await run(function(){return S.sb.from("reactions").upsert({drawing_id:d.uuid,user_id:S.uid,emoji:emoji},{onConflict:"drawing_id,user_id"})});
   }catch(e){
     if(prev)d.reactions[S.uid]=prev;else delete d.reactions[S.uid];
-    renderLb();toast("לא הצלחנו לשמור את התגובה");
+    refreshQr(d);if(S.lb)renderLb();
+    toast("לא הצלחנו לשמור את התגובה");
   }
   S.reacting=false;
+}
+async function doComment(){
+  var d=S.byId[S.lb];var inp=$("#cm-in");
+  if(!d||!inp||!S.uid)return;
+  var v=inp.value.trim().slice(0,200);
+  if(!v)return;
+  inp.disabled=true;
+  try{
+    var row=await run(function(){return S.sb.from("comments").insert({drawing_id:d.uuid,body:v}).select().single()});
+    (d.comments=d.comments||[]).push({id:row.id,uid:S.uid,body:v,at:row.created_at});
+    inp.value="";
+    renderLb();refreshQr(d);
+    var ni=$("#cm-in");if(ni)ni.focus();
+  }catch(e){
+    inp.disabled=false;
+    toast("לא הצלחנו לשלוח את התגובה");
+  }
+}
+async function delComment(cid){
+  var d=S.byId[S.lb];if(!d)return;
+  try{
+    await run(function(){return S.sb.from("comments").delete().eq("id",cid)});
+    d.comments=(d.comments||[]).filter(function(c){return c.id!==cid});
+    renderLb();refreshQr(d);
+  }catch(e){toast("המחיקה לא הצליחה")}
 }
 function startEdit(){
   var d=S.byId[S.lb];if(!d)return;
@@ -565,6 +697,39 @@ async function saveItems(){
   window.scrollTo(0,0);
 }
 
+/* ---------- start date ---------- */
+function startRoot(){
+  var r=document.getElementById("start-root");
+  if(!r){r=document.createElement("div");r.id="start-root";document.body.appendChild(r)}
+  return r;
+}
+function openStart(){
+  if(!S.uid)return;
+  S.startModal=true;document.body.style.overflow="hidden";
+  var t=ymd(new Date());
+  startRoot().innerHTML='<div class="sheet" data-act="start-bg"><div class="sheet-box" role="dialog" aria-modal="true" aria-label="תאריך התחלה">'+
+    '<div class="sheet-head"><h2>תאריך התחלה</h2><button class="icon" data-act="start-close" aria-label="סגירה">×</button></div>'+
+    '<p class="hint">המונה "יום N" שלך סופר מהתאריך הזה. אם העלית ציורים מלפני כן, הספירה תתחיל מהציור הראשון.</p>'+
+    '<div><label for="start-in" class="lb-date">תאריך הציור הראשון</label><input id="start-in" class="note-in" type="date" max="'+t+'" value="'+esc(startOf(S.uid))+'"></div>'+
+    '<p class="msg" id="start-msg" role="alert"></p>'+
+    '<div class="sheet-foot"><button class="btn" data-act="start-close">ביטול</button><button class="btn primary" data-act="start-save">שמירה</button></div></div></div>';
+}
+function closeStart(){
+  S.startModal=false;startRoot().innerHTML="";
+  document.body.style.overflow=(S.lb||S.sheet)?"hidden":"";
+}
+async function saveStart(){
+  var inp=$("#start-in"),msg=$("#start-msg");
+  var v=inp?inp.value:"";
+  if(!v||v>ymd(new Date())){msg.textContent="בחרו תאריך שאינו בעתיד.";return}
+  try{
+    await run(function(){return S.sb.from("profiles").update({start_date:v}).eq("id",S.uid)});
+    S.starts[S.uid]=v;
+    closeStart();render();
+    toast("תאריך ההתחלה נשמר");
+  }catch(e){msg.textContent="לא הצלחנו לשמור. נסו שוב."}
+}
+
 /* ---------- auth ---------- */
 function authErr(e){
   var m=((e&&e.message)||"")+"";
@@ -582,14 +747,16 @@ async function doAuth(form){
   var msg=$("#auth-msg"),btn=$("#auth-go");
   var email=form.email.value.trim(),pw=form.password.value;
   var name=form.name?form.name.value.trim():"";
+  var start=form.start?form.start.value:"";
   S.authEmail=email;
   if(!email||!pw){msg.textContent="צריך אימייל וסיסמה.";return}
   if(S.authMode==="signup"&&!name){msg.textContent="איך לקרוא לך?";return}
+  if(S.authMode==="signup"&&(!start||start>ymd(new Date()))){msg.textContent="בחרו תאריך התחלה שאינו בעתיד.";return}
   msg.textContent="";btn.disabled=true;
   try{
     var r;
     if(S.authMode==="signup"){
-      r=await S.sb.auth.signUp({email:email,password:pw,options:{data:{name:name}}});
+      r=await S.sb.auth.signUp({email:email,password:pw,options:{data:{name:name,start_date:start}}});
       if(!r.error&&!r.data.session){
         msg.textContent="החשבון נוצר, אבל צריך לאשר את האימייל לפני כניסה.";
         btn.disabled=false;return;
@@ -617,10 +784,12 @@ document.addEventListener("error",function(e){if(e.target&&e.target.tagName==="I
 
 document.addEventListener("submit",function(e){
   if(e.target&&e.target.id==="auth-form"){e.preventDefault();doAuth(e.target)}
+  if(e.target&&e.target.id==="cm-form"){e.preventDefault();doComment()}
 });
 document.addEventListener("input",function(e){
   var t=e.target;
   if(t&&t.id==="a-email"){S.authEmail=t.value;return}
+  if(t&&t.id==="a-start"){S.authStart=t.value;return}
   if(!t.matches||!t.matches("[data-i][data-k]"))return;
   var i=Number(t.getAttribute("data-i")),k=t.getAttribute("data-k");
   var it=U.items[i];if(!it)return;
@@ -632,9 +801,9 @@ document.addEventListener("click",function(e){
   var el=e.target.closest("[data-act]");
   if(!el)return;
   var a=el.getAttribute("data-act");
-  if(a==="lb-bg"||a==="sheet-bg"){
+  if(a==="lb-bg"||a==="sheet-bg"||a==="start-bg"){
     if(e.target!==el)return;
-    if(a==="lb-bg")closeLb();else if(!U.busy)closeSheet();
+    if(a==="lb-bg")closeLb();else if(a==="start-bg")closeStart();else if(!U.busy)closeSheet();
     return;
   }
   switch(a){
@@ -643,7 +812,7 @@ document.addEventListener("click",function(e){
     case "logout":if(S.sb)S.sb.auth.signOut();break;
     case "tab":S.tab=el.getAttribute("data-t");render();break;
     case "filter":S.filter=el.getAttribute("data-u");render();break;
-    case "open":openLb(el.getAttribute("data-id"));break;
+    case "open":S.focusC=el.getAttribute("data-focus")==="c";openLb(el.getAttribute("data-id"));break;
     case "openday":
       var date=el.getAttribute("data-date");
       var f=lbList().filter(function(d){return d.date===date})[0]||S.drawings.filter(function(d){return d.date===date})[0];
@@ -655,8 +824,17 @@ document.addEventListener("click",function(e){
       var m=S.month.m+Number(el.getAttribute("data-d")),y=S.month.y;
       if(m<0){m=11;y--}else if(m>11){m=0;y++}
       S.month={y:y,m:m};render();break;
-    case "surprise":
-      var l=lbList();if(l.length)openLb(l[Math.floor(Math.random()*l.length)].id);break;
+    case "qreact":S.pick=null;doReact(el.getAttribute("data-e"),el.getAttribute("data-id"));break;
+    case "qpick":
+      var qid=el.getAttribute("data-id"),prevPick=S.pick;
+      S.pick=(prevPick===qid)?null:qid;
+      if(prevPick&&prevPick!==qid&&S.byId[prevPick])refreshQr(S.byId[prevPick]);
+      if(S.byId[qid])refreshQr(S.byId[qid]);
+      break;
+    case "cmdel":delComment(el.getAttribute("data-cid"));break;
+    case "start-open":openStart();break;
+    case "start-close":closeStart();break;
+    case "start-save":saveStart();break;
     case "lb-close":closeLb();break;
     case "prev":lbStep(-1);break;
     case "next":lbStep(1);break;
@@ -683,6 +861,7 @@ $("#file-input").addEventListener("change",function(e){
 
 document.addEventListener("keydown",function(e){
   if(e.key==="Escape"){
+    if(S.startModal){closeStart();return}
     if(S.sheet&&!U.busy){closeSheet();return}
     if(S.lb){if(S.editing){S.editing=false;renderLb()}else closeLb()}
     return;
