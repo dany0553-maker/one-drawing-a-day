@@ -145,7 +145,7 @@ function render(){
   if(!S.loaded&&!S.err){
     html+='<div class="note-box">טוען את הספר…</div>';
   }else if(S.loaded){
-    html+=streaksHTML()+todayHTML()+yearHTML()+controlsHTML()+(S.tab==="days"?daysHTML():calHTML());
+    html+=todayHTML()+streaksHTML()+controlsHTML()+(S.tab==="days"?daysHTML():S.tab==="year"?yearHTML():calHTML());
   }
   $("#app").innerHTML=html;
   fab.hidden=!(S.loaded&&canUpload())||S.sheet||!!S.lb;
@@ -279,8 +279,7 @@ function todayHTML(){
     '<div class="p">'+esc(promptFor(t))+'</div>'+
     '<div class="note-acts"><button class="nbtn" data-act="pick">'+(mine?"החלפת הציור":"העלאת ציור")+'</button>'+thumb+'</div>'+
     (miss>0?'<button class="linkbtn dk" data-act="pick">יש '+(miss===1?'יום אחד':miss+' ימים')+' בלי ציור. להוסיף?</button>':'')+'</section>'+
-    '<div class="fchips" aria-label="מי ציירו היום">'+chips+'</div>'+
-    (all.length?'<div class="fcount">'+done.length+' מתוך '+all.length+' ציירו היום</div>':'');
+    '';
 }
 
 function yearHTML(){
@@ -311,14 +310,10 @@ function yearHTML(){
 }
 
 function controlsHTML(){
-  var chips=S.order.length>1?('<button class="chip" data-act="filter" data-u="all" aria-pressed="'+(S.filter==="all")+'">הכל</button>'+
-    S.order.map(function(u){return '<button class="chip" data-act="filter" data-u="'+esc(u)+'" aria-pressed="'+(S.filter===u)+'">'+marker(u,14)+esc(nameOf(u))+'</button>'}).join("")):"";
-  return '<section class="controls"><div class="ctl-row"><div class="seg" role="group" aria-label="תצוגה">'+
-    '<button data-act="tab" data-t="days" aria-pressed="'+(S.tab==="days")+'">ימים</button>'+
-    '<button data-act="tab" data-t="cal" aria-pressed="'+(S.tab==="cal")+'">לוח שנה</button></div>'+
-    '<span class="spacer"></span>'+
-    ''+
-    '</div>'+(chips?'<div class="ctl-row">'+chips+'</div>':'')+'</section>';
+  return '<section class="controls"><div class="seg" role="group" aria-label="תצוגה">'+
+    '<button data-act="tab" data-t="days" aria-pressed="'+(S.tab==="days")+'">פיד</button>'+
+    '<button data-act="tab" data-t="cal" aria-pressed="'+(S.tab==="cal")+'">לוח שנה</button>'+
+    '<button data-act="tab" data-t="year" aria-pressed="'+(S.tab==="year")+'">שנה</button></div></section>';
 }
 
 function emptyHTML(){
@@ -369,7 +364,7 @@ function daysHTML(){
   return '<section class="feed">'+dates.map(function(date){
     var ps=persons.filter(function(u){return startOf(u)<=date});
     var mn=(S.uid&&startOf(S.uid)<=date)?'יום '+dayNum(S.uid,date)+' שלך':'';
-    return '<article class="day"><div class="day-head"><h3>'+esc(fmtLong(date))+(date===t?'<span class="tag-today">היום</span>':'')+'</h3><span class="dn">'+mn+'</span></div>'+
+    return '<article class="day"><div class="day-head"><h3>'+(date===t?'היום':esc(fmtLong(date)))+'</h3><span class="dn">'+(date===t?vis.filter(function(d){return d.date===date}).length+' ציורים':mn)+'</span></div>'+
       '<div class="slots" style="--n:'+Math.min(ps.length,3)+'">'+ps.map(function(u){return slotHTML(date,u)}).join("")+'</div></article>';
   }).join("")+'</section>';
 }
