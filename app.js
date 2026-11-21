@@ -18,16 +18,18 @@ var fmtShort=function(s){return fShort.format(parse(s))};
 var REACTS=["❤️","😍","🔥","👏","🤯"];
 var COL={b:"var(--p0)",p:"var(--p1)",y:"var(--p2)",g:"var(--p3)",r:"var(--red)"};
 var KINDS=["tri","circ","dia","half","sq","zig"];
+var PALETTE=["#2aa1f0","#f58aa0","#f7b928","#35b872","#a58bff","#ff8a3d","#f0443c","#14b8a6","#a3e635","#e879f9","#b4783c","#64748b"];
+var SHAPES=["tri","circ","dia","half","sq","zig"];
 var BUCKET="drawings";
 var START=/^\d{4}-\d{2}-\d{2}$/.test(CFG.START_DATE||"")?CFG.START_DATE:null;
 
 var S={sb:null,uid:null,view:"boot",
   authMode:"login",authEmail:"",
-  drawings:[],byId:{},names:{},starts:{},order:[],first:null,authStart:"",
+  drawings:[],byId:{},names:{},starts:{},looks:{},order:[],first:null,authStart:"",
   loaded:false,err:"",lastLoad:0,
   tab:"days",filter:"all",month:null,
   lb:null,editing:false,pendingDel:null,reacting:false,pick:null,focusC:false,startModal:false,
-  sheet:false,prefDate:null,ch:null};
+  sheet:false,prefDate:null,ch:null,authShape:"",authColor:"",setShape:"",setColor:"",asked:false,gal:false};
 var now=new Date();S.month={y:now.getFullYear(),m:now.getMonth()};
 var U={items:[],busy:false,msg:"",msg2:""};
 
@@ -50,8 +52,23 @@ function strip(){
   return '<div class="strip" aria-hidden="true">'+seq.map(function(x){return shape(x[0],COL[x[1]],28)}).join("")+'</div>';
 }
 function pIndex(uid){return Math.max(0,Math.min(S.order.indexOf(uid),5))}
-function pColor(uid){return "var(--p"+pIndex(uid)+")"}
-function marker(uid,size){return shape(KINDS[pIndex(uid)],pColor(uid),size||14)}
+function hasLook(uid){return !!(S.looks[uid]&&S.looks[uid].k&&S.looks[uid].c)}
+function kindOf(uid){return hasLook(uid)?S.looks[uid].k:KINDS[pIndex(uid)]}
+function pColor(uid){return hasLook(uid)?S.looks[uid].c:"var(--p"+pIndex(uid)+")"}
+function marker(uid,size){return shape(kindOf(uid),pColor(uid),size||14)}
+function pickerHTML(kind,color,idp){
+  var sh=SHAPES.map(function(k){return '<button type="button" class="pk-s" data-act="pk-shape" data-v="'+k+'" data-g="'+idp+'" aria-pressed="'+(k===kind)+'" aria-label="צורה">'+shape(k,color||"var(--fg)",26)+'</button>'}).join("");
+  var co=PALETTE.map(function(c){return '<button type="button" class="pk-c" data-act="pk-color" data-v="'+c+'" data-g="'+idp+'" aria-pressed="'+(c===color)+'" aria-label="צבע" style="background:'+c+'"></button>'}).join("");
+  return '<div class="picker" id="pk-'+idp+'"><div class="pk-prev">'+shape(kind||"tri",color||"#a4a9b8",44)+'</div><div class="pk-row">'+sh+'</div><div class="pk-row">'+co+'</div></div>';
+}
+function rndPick(a){return a[Math.floor(Math.random()*a.length)]}
+function takenLooks(){var t={};Object.keys(S.looks).forEach(function(u){if(u!==S.uid&&hasLook(u))t[S.looks[u].k+S.looks[u].c]=1});return t}
+function promptFor(date){
+  var P=window.PROMPTS||[];if(!P.length)return "";
+  var base=START||"2026-08-26";
+  var n=dayDiff(base,date);
+  return P[((n%P.length)+P.length)%P.length];
+}
 function nameOf(uid){var n=S.names[uid];if(n)return n;return uid===S.uid?"אני":"חבר/ה"}
 
 /* ---------- personal start dates ---------- */
@@ -99,7 +116,7 @@ function compute(){
   S.first=min;
   if(S.filter!=="all"&&!set.has(S.filter))S.filter="all";
 }
-function visible(){return S.drawings.filter(function(d){return S.filter==="all"||d.uid===S.filter})}
+function visible(){if(S.gal&&S.uid)return S.drawings.filter(function(d){return d.uid===S.uid});return S.drawings.filter(function(d){return S.filter==="all"||d.uid===S.filter})}
 function lbList(){
   return visible().slice().sort(function(a,b){
     if(a.date===b.date)return S.order.indexOf(a.uid)-S.order.indexOf(b.uid);
@@ -115,11 +132,12 @@ function render(){
   var fab=$("#fab");
   if(S.view==="setup"||S.view==="offline"||S.view==="auth"||S.view==="boot"){
     var body=S.view==="setup"?setupHTML():S.view==="offline"?offlineHTML():S.view==="auth"?authHTML():'<div class="note-box">טוען…</div>';
-    $("#app").innerHTML='<header class="top">'+strip()+'<h1>ציור <span class="hl">ביום</span></h1></header>'+body+'<div style="margin-top:28px">'+strip()+'</div>';
+    $("#app").innerHTML='<header class="top"><span class="sticker">המחברת</span></header>'+body;
     fab.hidden=true;
     return;
   }
   compute();
+  if(S.gal){$("#app").innerHTML=galHTML();fab.hidden=!(S.loaded&&canUpload())||S.sheet||!!S.lb;if(S.lb)renderLb();return}
   var html=headerHTML();
   if(S.err){
     html+='<div class="note-box">לא הצלחנו לטעון את הציורים כרגע. בדקו את החיבור לאינטרנט. <button class="linkbtn" data-act="reload">לנסות שוב</button></div>';
@@ -129,12 +147,22 @@ function render(){
   }else if(S.loaded){
     html+=streaksHTML()+todayHTML()+yearHTML()+controlsHTML()+(S.tab==="days"?daysHTML():calHTML());
   }
-  html+='<div style="margin-top:28px">'+strip()+'</div>';
   $("#app").innerHTML=html;
   fab.hidden=!(S.loaded&&canUpload())||S.sheet||!!S.lb;
   if(S.lb)renderLb();
 }
 
+function galHTML(){
+  var mine=S.drawings.filter(function(d){return d.uid===S.uid}).sort(function(a,b){return a.date<b.date?1:-1});
+  var cells=mine.map(function(d){
+    return '<button class="gcell" data-act="open" data-id="'+esc(d.id)+'" aria-label="'+esc(fmtShort(d.date))+'">'+imgTag(d,fmtShort(d.date))+
+      '<span class="gd">'+esc(fmtShort(d.date))+'</span><span class="gn">יום '+dayNum(S.uid,d.date)+'</span></button>';
+  }).join("");
+  return '<header class="top2"><div class="top-r"><span class="sticker">המחברת שלי</span>'+
+    '<p class="sub"><b>'+mine.length+'</b> ציורים</p></div>'+
+    '<button type="button" class="sticker home" data-act="gal-close" aria-label="חזרה לבית"><svg viewBox="0 0 32 32" width="34" height="34" aria-hidden="true"><path d="M5 16 16 5l11 11M8 14v12h16V14" fill="none" stroke="#1d2230" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button></header>'+
+    (mine.length?'<div class="ggrid">'+cells+'</div>':'<div class="note-box">עוד אין ציורים. העלה את הראשון.</div>');
+}
 function setupHTML(){
   return '<div class="setup"><h2>עוד לא חיברנו מאגר</h2><p>פתחו את הקובץ <code>config.js</code> ומלאו את <code>SUPABASE_URL</code> ואת <code>SUPABASE_ANON_KEY</code>. ההוראות בקובץ README.</p></div>';
 }
@@ -143,9 +171,11 @@ function offlineHTML(){
 }
 function authHTML(){
   var su=S.authMode==="signup";
+  if(su&&!S.authShape){S.authShape=rndPick(SHAPES);S.authColor=rndPick(PALETTE)}
   return '<form class="auth" id="auth-form" novalidate><h2>'+(su?"פתיחת חשבון":"כניסה")+'</h2>'+
     (su?'<div class="field"><label for="a-name">איך לקרוא לך?</label><input id="a-name" name="name" type="text" autocomplete="nickname" maxlength="30"></div>'+
-      '<div class="field"><label for="a-start">מתי התחלת לצייר בספר?</label><input id="a-start" name="start" type="date" max="'+ymd(new Date())+'" value="'+esc(S.authStart||ymd(new Date()))+'"><span class="hint">אם התחלת לפני היום, אחרי ההרשמה תוכל להעלות את הציורים הקודמים.</span></div>':'')+
+      '<div class="field"><label for="a-start">מתי התחלת לצייר בספר?</label><input id="a-start" name="start" type="date" max="'+ymd(new Date())+'" value="'+esc(S.authStart||ymd(new Date()))+'"><span class="hint">אם התחלת לפני היום, אחרי ההרשמה תוכל להעלות את הציורים הקודמים.</span></div>'+
+      '<div class="field"><label>בחרו צורה וצבע שיסמנו אותך</label>'+pickerHTML(S.authShape,S.authColor,"auth")+'</div>':'')+
     '<div class="field"><label for="a-email">אימייל</label><input id="a-email" name="email" type="email" inputmode="email" autocomplete="email" autocapitalize="none" value="'+esc(S.authEmail)+'" dir="ltr"></div>'+
     '<div class="field"><label for="a-pw">סיסמה</label><input id="a-pw" name="password" type="password" autocomplete="'+(su?"new-password":"current-password")+'" dir="ltr"></div>'+
     '<p class="msg" id="auth-msg" role="alert"></p>'+
@@ -154,8 +184,11 @@ function authHTML(){
 }
 
 function headerHTML(){
-  var sub=S.uid?'יום <b>'+dayNum(S.uid,ymd(new Date()))+'</b> שלך · <b>'+count(S.uid)+'</b> ציורים':"";
-  return '<header class="top">'+strip()+'<h1>ציור <span class="hl">ביום</span></h1><p class="sub"><span>'+sub+'</span><button class="linkbtn" data-act="start-open">תאריך התחלה</button><button class="linkbtn" data-act="logout">התנתקות</button></p></header>';
+  var nm=S.uid?nameOf(S.uid):"";
+  var dn=S.uid?dayNum(S.uid,ymd(new Date())):"";
+  return '<header class="top2"><div class="top-r"><button type="button" class="sticker" data-act="gal-open" aria-label="הציורים שלי">המחברת של '+esc(nm)+' ›</button>'+
+    '<p class="sub"><span><b>'+(S.uid?count(S.uid):0)+'</b> ציורים</span><button class="linkbtn" data-act="start-open">ההגדרות שלי</button><button class="linkbtn" data-act="logout">התנתקות</button></p></div>'+
+    '<div class="stamp2" aria-label="יום '+dn+'"><div><b>'+dn+'</b><span>יום</span></div></div></header>';
 }
 
 /* ---------- streaks ---------- */
@@ -184,7 +217,7 @@ function streakInfo(uid){
   return {cur:cur,best:Math.max(best,cur),week:week,drewToday:drewToday};
 }
 function weekHTML(uid,info,big){
-  var k=KINDS[pIndex(uid)],c=pColor(uid);
+  var k=kindOf(uid),c=pColor(uid);
   return info.week.map(function(w){
     var inner;
     if(w.on)inner=shape(k,c,big?32:18);
@@ -217,37 +250,37 @@ function rowStreakHTML(uid){
     '<div class="sk-n" style="color:'+c+'">'+i.cur+'<small>'+(i.cur===1?'יום':'ימים')+'</small></div>'+
     '<div class="sk-mini">'+weekHTML(uid,i,false)+'</div></div>';
 }
+function skCard(uid){
+  var i=streakInfo(uid),c=pColor(uid),me=uid===S.uid;
+  var dots=i.week.map(function(w){return '<i style="background:'+(w.on?c:'var(--surface2)')+'"></i>'}).join("");
+  var risk=(!i.drewToday)?'<div class="skc-r">'+(me?'עוד לא ציירת':'עוד לא היום')+'</div>':'<div class="skc-r ok">ציירת היום</div>';
+  if(!i.drewToday&&!me)risk='<div class="skc-r">עוד לא היום</div>';
+  if(i.drewToday&&!me)risk='<div class="skc-r ok">צייר/ה היום</div>';
+  return '<div class="skc'+(me?' me':'')+'"><div class="skc-n">'+marker(uid,16)+'<span>'+esc(nameOf(uid))+'</span></div>'+
+    '<div class="skc-num" style="color:'+c+'">'+i.cur+'</div><div class="skc-l">'+(i.cur===1?'יום ברצף':'ימים ברצף')+'</div>'+
+    '<div class="skc-d">'+dots+'</div>'+risk+'</div>';
+}
 function streaksHTML(){
   if(!S.order.length)return "";
-  var others=S.order.filter(function(u){return u!==S.uid}).map(function(u){return {u:u,c:streakInfo(u).cur}})
+  var arr=S.order.map(function(u){return {u:u,c:streakInfo(u).cur}})
     .sort(function(a,b){return b.c-a.c||S.order.indexOf(a.u)-S.order.indexOf(b.u)});
-  var h="";
-  if(S.uid)h+=bigStreakHTML(S.uid);
-  if(others.length===1)h+=bigStreakHTML(others[0].u);
-  else if(others.length>1)h+='<div class="sk-sec">השאר</div><section class="sk-list">'+others.map(function(o){return rowStreakHTML(o.u)}).join("")+'</section>';
-  return '<div class="streaks">'+h+'</div>';
+  return '<div class="skrow">'+arr.map(function(o){return skCard(o.u)}).join("")+'</div>';
 }
 
 function todayHTML(){
   var t=ymd(new Date());
   var mine=S.uid?S.byId[t+"_"+S.uid]:null;
-  var others=S.order.filter(function(u){return u!==S.uid});
-  var friends;
-  if(others.length){
-    friends=others.map(function(u){
-      var sent=!!S.byId[t+"_"+u];
-      return '<span>'+marker(u,12)+esc(nameOf(u))+" "+(sent?"כבר שלח/ה":"עוד לא שלח/ה")+'</span>';
-    }).join("");
-  }else{
-    friends='<span>החבר/ה עוד לא נרשם/ה. שלחו להם את הקישור לאפליקציה.</span>';
-  }
+  var all=S.order.filter(function(u){return startOf(u)<=t});
+  var done=all.filter(function(u){return !!S.byId[t+"_"+u]});
   var miss=S.uid?missingDays(S.uid):0;
-  var acts='<button class="btn primary" data-act="pick">'+(mine?"החלפת הציור":"העלאת הציור של היום")+'</button>'+
-    (miss>0?'<button class="linkbtn" data-act="pick">יש '+(miss===1?'יום אחד':miss+' ימים')+' בלי ציור. להוסיף?</button>':'');
+  var chips=all.map(function(u){var sent=!!S.byId[t+"_"+u];return '<span class="fchip'+(sent?' on':'')+'">'+marker(u,14)+esc(nameOf(u))+'</span>'}).join("");
   var thumb=mine?'<button class="thumb" data-act="open" data-id="'+esc(mine.id)+'" aria-label="פתיחת הציור של היום">'+imgTag(mine,"הציור של היום")+'</button>':"";
-  return '<section class="today"><div class="info"><span class="date">'+esc(fmtLong(t))+'</span>'+
-    '<h2>'+(mine?"הציור של היום בפנים":"עוד אין ציור להיום")+'</h2>'+
-    '<div class="friends">'+friends+'</div><div class="acts">'+acts+'</div></div>'+thumb+'</section>';
+  return '<section class="note"><span class="tape"></span>'+
+    '<div class="p">'+esc(promptFor(t))+'</div>'+
+    '<div class="note-acts"><button class="nbtn" data-act="pick">'+(mine?"החלפת הציור":"העלאת ציור")+'</button>'+thumb+'</div>'+
+    (miss>0?'<button class="linkbtn dk" data-act="pick">יש '+(miss===1?'יום אחד':miss+' ימים')+' בלי ציור. להוסיף?</button>':'')+'</section>'+
+    '<div class="fchips" aria-label="מי ציירו היום">'+chips+'</div>'+
+    (all.length?'<div class="fcount">'+done.length+' מתוך '+all.length+' ציירו היום</div>':'');
 }
 
 function yearHTML(){
@@ -457,7 +490,7 @@ async function loadAll(){
     var res=await Promise.all([
       run(function(){return S.sb.from("drawings").select("*").order("date",{ascending:false}).limit(2000)}),
       run(function(){return S.sb.from("reactions").select("*").limit(10000)}),
-      run(function(){return S.sb.from("profiles").select("id,name,start_date")}),
+      run(function(){return S.sb.from("profiles").select("id,name,start_date,shape,color")}).catch(function(){return run(function(){return S.sb.from("profiles").select("id,name,start_date")})}),
       run(function(){return S.sb.from("comments").select("*").order("created_at",{ascending:true}).limit(5000)})
     ]);
     var rx={},cm={};
@@ -467,9 +500,11 @@ async function loadAll(){
       return {id:r.date+"_"+r.user_id,uuid:r.id,uid:r.user_id,date:r.date,path:r.image_path,thumb:r.thumb_path,note:r.note||"",reactions:rx[r.id]||{},comments:cm[r.id]||[]};
     });
     S.names={};
-    S.starts={};
-    (res[2]||[]).forEach(function(p){S.names[p.id]=p.name||"";if(p.start_date)S.starts[p.id]=p.start_date});
+    S.starts={};S.looks={};
+    (res[2]||[]).forEach(function(p){S.names[p.id]=p.name||"";if(p.start_date)S.starts[p.id]=p.start_date;
+      if(p.shape&&p.color&&SHAPES.indexOf(p.shape)>=0&&/^#[0-9a-fA-F]{6}$/.test(p.color))S.looks[p.id]={k:p.shape,c:p.color}});
     S.loaded=true;S.err="";S.lastLoad=Date.now();
+    if(!S.asked&&S.uid&&!hasLook(S.uid)){S.asked=true;setTimeout(function(){openStart(true)},300)}
   }catch(e){
     S.err="load";
   }
@@ -703,13 +738,17 @@ function startRoot(){
   if(!r){r=document.createElement("div");r.id="start-root";document.body.appendChild(r)}
   return r;
 }
-function openStart(){
+function openStart(first){
   if(!S.uid)return;
   S.startModal=true;document.body.style.overflow="hidden";
   var t=ymd(new Date());
-  startRoot().innerHTML='<div class="sheet" data-act="start-bg"><div class="sheet-box" role="dialog" aria-modal="true" aria-label="תאריך התחלה">'+
-    '<div class="sheet-head"><h2>תאריך התחלה</h2><button class="icon" data-act="start-close" aria-label="סגירה">×</button></div>'+
-    '<p class="hint">המונה "יום N" שלך סופר מהתאריך הזה. אם העלית ציורים מלפני כן, הספירה תתחיל מהציור הראשון.</p>'+
+  var lk=S.looks[S.uid]||{};
+  S.setShape=lk.k||rndPick(SHAPES);
+  S.setColor=lk.c||rndPick(PALETTE);
+  startRoot().innerHTML='<div class="sheet" data-act="start-bg"><div class="sheet-box" role="dialog" aria-modal="true" aria-label="ההגדרות שלי">'+
+    '<div class="sheet-head"><h2>'+(first===true?"בחרו צורה וצבע":"ההגדרות שלי")+'</h2><button class="icon" data-act="start-close" aria-label="סגירה">×</button></div>'+
+    '<p class="hint">הצורה והצבע שלך מסמנים אותך בכל מקום באפליקציה, והם לא ישתנו כשמצטרפים אחרים.</p>'+
+    pickerHTML(S.setShape,S.setColor,"set")+
     '<div><label for="start-in" class="lb-date">תאריך הציור הראשון</label><input id="start-in" class="note-in" type="date" max="'+t+'" value="'+esc(startOf(S.uid))+'"></div>'+
     '<p class="msg" id="start-msg" role="alert"></p>'+
     '<div class="sheet-foot"><button class="btn" data-act="start-close">ביטול</button><button class="btn primary" data-act="start-save">שמירה</button></div></div></div>';
@@ -723,11 +762,17 @@ async function saveStart(){
   var v=inp?inp.value:"";
   if(!v||v>ymd(new Date())){msg.textContent="בחרו תאריך שאינו בעתיד.";return}
   try{
-    await run(function(){return S.sb.from("profiles").update({start_date:v}).eq("id",S.uid)});
-    S.starts[S.uid]=v;
+    await run(function(){return S.sb.from("profiles").update({start_date:v,shape:S.setShape,color:S.setColor}).eq("id",S.uid)});
+    S.starts[S.uid]=v;S.looks[S.uid]={k:S.setShape,c:S.setColor};
     closeStart();render();
-    toast("תאריך ההתחלה נשמר");
-  }catch(e){msg.textContent="לא הצלחנו לשמור. נסו שוב."}
+    toast("נשמר");
+  }catch(e){msg.textContent="לא הצלחנו לשמור. ודאו שהרצתם את העדכון ב-Supabase ונסו שוב."}
+}
+function pkRefresh(g){
+  var kind=g==="set"?S.setShape:S.authShape,color=g==="set"?S.setColor:S.authColor;
+  var el=document.getElementById("pk-"+g);if(!el)return;
+  var tmp=document.createElement("div");tmp.innerHTML=pickerHTML(kind,color,g);
+  el.parentNode.replaceChild(tmp.firstChild,el);
 }
 
 /* ---------- auth ---------- */
@@ -756,7 +801,7 @@ async function doAuth(form){
   try{
     var r;
     if(S.authMode==="signup"){
-      r=await S.sb.auth.signUp({email:email,password:pw,options:{data:{name:name,start_date:start}}});
+      r=await S.sb.auth.signUp({email:email,password:pw,options:{data:{name:name,start_date:start,shape:S.authShape,color:S.authColor}}});
       if(!r.error&&!r.data.session){
         msg.textContent="החשבון נוצר, אבל צריך לאשר את האימייל לפני כניסה.";
         btn.disabled=false;return;
@@ -798,6 +843,12 @@ document.addEventListener("input",function(e){
 });
 
 document.addEventListener("click",function(e){
+  var pk=e.target.closest&&e.target.closest("[data-act='pk-shape'],[data-act='pk-color']");
+  if(pk){
+    var g=pk.getAttribute("data-g"),v=pk.getAttribute("data-v"),isS=pk.getAttribute("data-act")==="pk-shape";
+    if(g==="set"){if(isS)S.setShape=v;else S.setColor=v}else{if(isS)S.authShape=v;else S.authColor=v}
+    pkRefresh(g);return;
+  }
   var el=e.target.closest("[data-act]");
   if(!el)return;
   var a=el.getAttribute("data-act");
@@ -812,6 +863,8 @@ document.addEventListener("click",function(e){
     case "logout":if(S.sb)S.sb.auth.signOut();break;
     case "tab":S.tab=el.getAttribute("data-t");render();break;
     case "filter":S.filter=el.getAttribute("data-u");render();break;
+    case "gal-open":S.gal=true;window.scrollTo(0,0);render();break;
+    case "gal-close":S.gal=false;window.scrollTo(0,0);render();break;
     case "open":S.focusC=el.getAttribute("data-focus")==="c";openLb(el.getAttribute("data-id"));break;
     case "openday":
       var date=el.getAttribute("data-date");

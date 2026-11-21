@@ -1,7 +1,7 @@
 // Service worker מינימלי: שומר את קובצי האפליקציה כדי שתיפתח מהר ותהיה ניתנת להתקנה.
 // הציורים עצמם וה-API של Supabase לא עוברים דרכו.
-var CACHE = "drawing-a-day-v1";
-var SHELL = ["./", "index.html", "style.css", "app.js", "config.js", "manifest.webmanifest",
+var CACHE = "drawing-a-day-v2";
+var SHELL = ["./", "index.html", "style.css", "app.js", "prompts.js", "config.js", "manifest.webmanifest",
   "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 
 self.addEventListener("install", function (e) {
@@ -22,7 +22,7 @@ self.addEventListener("fetch", function (e) {
   var url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
   e.respondWith(
-    fetch(req).then(function (res) {
+    fetch(req, { cache: "no-cache" }).then(function (res) {
       if (res && res.ok) {
         var copy = res.clone();
         caches.open(CACHE).then(function (c) { c.put(req, copy); });
